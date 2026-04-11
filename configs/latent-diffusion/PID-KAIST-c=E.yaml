@@ -56,13 +56,13 @@ model:
           - 2
           - 4
           num_res_blocks: 2
-          attn_resolutions: 
+          attn_resolutions:
           - 32
           dropout: 0
         lossconfig:
           target: torch.nn.Identity
     cond_stage_config: "__is_first_stage__"
-    tev_net_config: 
+    tev_net_config:
       target: ldm.modules.HADARNet.modules.HADARNet
       params:
         in_channels: 3
@@ -70,18 +70,20 @@ model:
         smp_model: Unet
         smp_encoder: resnet18
         ckpt_path: "./pretrained/TeVNet_KAIST/epoch_950.pth"
+        seg_num_classes: 19
+        use_seg_head: false
 
 data:
   target: main.DataModuleFromConfig
   params:
     batch_size: 12
-    num_workers: 4
+    num_workers: 6
     wrap: false
     train:
-      target: ldm.data.KAIST.KAISTTrain
+      target: ldm.data.vedai512.VEDAITrain
       params:
         size: 512
     validation:
-      target: ldm.data.KAIST.KAISTVal
+      target: ldm.data.vedai512.VEDAIVal
       params:
         size: 512
