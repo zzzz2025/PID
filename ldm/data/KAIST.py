@@ -129,8 +129,8 @@ class KAISTTrain(KAISTBase):
 class KAISTVal(KAISTBase):
     def __init__(self, flip_p=0., **kwargs):
         super().__init__(
-            ir_dir="./dataset/test/lwir",
-            vi_dir="./dataset/test/visible",
+            ir_dir="./dataset/val/lwir",
+            vi_dir="./dataset/val/visible",
             flip_p=flip_p,
             **kwargs
         )
