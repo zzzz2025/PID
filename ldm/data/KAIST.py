@@ -58,98 +58,79 @@ class my_transform_gray():
 
 class KAISTBase(Dataset):
     def __init__(self,
-                 txt_file,
-                 data_root,
+                 ir_dir,       # 红外图片文件夹，例如 /data/KAIST/train/lwir
+                 vi_dir,       # 可见光图片文件夹，例如 /data/KAIST/train/visible
                  size=None,
                  interpolation="bicubic",
-                 flip_p=0.5,
-                 ):
-        self.data_paths = txt_file
-        self.data_root = data_root
-        
-        self.ir_data_root = os.path.join(self.data_root, 'lwir')
-        self.vi_data_root = os.path.join(self.data_root, 'visible')
-        
-        with open(self.data_paths, "r") as f:
-            self.image_paths = f.read().splitlines()
-        self._length = len(self.image_paths)
+                 flip_p=0.5):
+
+        EXTS = ('.jpg', '.jpeg', '.png', '.bmp')
+
+        ir_files = sorted([
+            f for f in os.listdir(ir_dir)
+            if os.path.splitext(f)[1].lower() in EXTS
+        ])
+
+        self._length = len(ir_files)
         self.labels = {
-            "relative_file_path_": [l for l in self.image_paths],
-            "ir_file_path_": [os.path.join(self.ir_data_root, l)
-                           for l in self.image_paths],
-            "vi_file_path_": [os.path.join(self.vi_data_root, l)
-                           for l in self.image_paths],
+            "ir_file_path_": [os.path.join(ir_dir, f) for f in ir_files],
+            "vi_file_path_": [os.path.join(vi_dir, f) for f in ir_files],
         }
+
         self.size = size
-        self.interpolation = {"linear": PIL.Image.LINEAR,
+        self.interpolation = {"bicubic": PIL.Image.BICUBIC,
                               "bilinear": PIL.Image.BILINEAR,
-                              "bicubic": PIL.Image.BICUBIC,
-                              "lanczos": PIL.Image.LANCZOS,
-                              }[interpolation]
-        self.flip_enhance = my_transform_flip(flip_p=flip_p)
-        self.gray_enhance = my_transform_gray(gray_p=flip_p)
-        self.crop_enhance = my_transform_crop(crop_p=flip_p)
+                              "lanczos": PIL.Image.LANCZOS}[interpolation]
+        self.flip_enhance  = my_transform_flip(flip_p=flip_p)
+        self.crop_enhance  = my_transform_crop(crop_p=flip_p)
 
     def __len__(self):
         return self._length
 
     def __getitem__(self, i):
-        # return batch
-        example = dict((k, self.labels[k][i]) for k in self.labels)
-        
-        ## preprocessing ir imgs
-        image_ir = Image.open(example["ir_file_path_"])
-        if not image_ir.mode == "RGB":
-            image_ir = image_ir.convert("RGB")
+        example = {k: self.labels[k][i] for k in self.labels}
 
-        # default to score-sde preprocessing
-        img_ir = np.array(image_ir).astype(np.uint8)
-        crop = min(img_ir.shape[0], img_ir.shape[1])
-        h, w, = img_ir.shape[0], img_ir.shape[1]
-        img_ir = img_ir[(h - crop) // 2:(h + crop) // 2,
-              (w - crop) // 2:(w + crop) // 2]
+        def load_rgb(path):
+            img = Image.open(path)
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            arr = np.array(img).astype(np.uint8)
+            crop = min(arr.shape[0], arr.shape[1])
+            h, w = arr.shape[0], arr.shape[1]
+            arr = arr[(h-crop)//2:(h+crop)//2, (w-crop)//2:(w+crop)//2]
+            return Image.fromarray(arr)
 
-        image_ir = Image.fromarray(img_ir)
+        image_ir = load_rgb(example["ir_file_path_"])
+        image_vi = load_rgb(example["vi_file_path_"])
 
-        ## preprocesing visible imgs
-        image_vi = Image.open(example["vi_file_path_"])
-        if not image_vi.mode == "RGB":
-            image_vi = image_vi.convert("RGB")
-
-        # default to score-sde preprocessing
-        img_vi = np.array(image_vi).astype(np.uint8)
-        crop = min(img_vi.shape[0], img_vi.shape[1])
-        h, w, = img_vi.shape[0], img_vi.shape[1]
-        img_vi = img_vi[(h - crop) // 2:(h + crop) // 2,
-              (w - crop) // 2:(w + crop) // 2]
-
-        image_vi = Image.fromarray(img_vi)
-        
         if self.size is not None:
             image_ir, image_vi = self.crop_enhance.crop_enhance(image_ir, image_vi)
             image_ir = image_ir.resize((self.size, self.size), resample=self.interpolation)
             image_vi = image_vi.resize((self.size, self.size), resample=self.interpolation)
-        
+
         image_ir = np.array(image_ir).astype(np.uint8)
         image_vi = np.array(image_vi).astype(np.uint8)
-        
-        # image_vi = self.gray_enhance.gray_enhance(image_vi)
         image_ir, image_vi = self.flip_enhance.flip_enhance(image_ir, image_vi)
-        
-        example["image"] = (image_ir / 127.5 - 1.0).astype(np.float64)
-        example["conditional"] = (image_vi / 127.5 - 1.0).astype(np.float64)
-        return example
+
+        return {
+            "image":       (image_ir / 127.5 - 1.0).astype(np.float64),
+            "conditional": (image_vi / 127.5 - 1.0).astype(np.float64),
+        }
 
 
 class KAISTTrain(KAISTBase):
     def __init__(self, **kwargs):
-        super().__init__(txt_file="data/KAIST512/KAIST_512_train.txt", 
-                         data_root="KAIST/train", 
-                         **kwargs)
-
+        super().__init__(
+            ir_dir="/your/path/KAIST/train/lwir",
+            vi_dir="/your/path/KAIST/train/visible",
+            **kwargs
+        )
 
 class KAISTVal(KAISTBase):
     def __init__(self, flip_p=0., **kwargs):
-        super().__init__(txt_file="data/KAIST512/KAIST_512_test.txt", 
-                         data_root="KAIST/test",
-                         flip_p=flip_p, **kwargs)
+        super().__init__(
+            ir_dir="/your/path/KAIST/test/lwir",
+            vi_dir="/your/path/KAIST/test/visible",
+            flip_p=flip_p,
+            **kwargs
+        )
