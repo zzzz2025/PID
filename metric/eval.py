@@ -19,7 +19,7 @@ if __name__ == "__main__":
         
     fake_names = list(glob.glob('{}/*.png'.format(args.path2)))
     if len(fake_names) == 0:
-        fake_names = list(glob.glob('{}/*.jpg'.format(args.path1)))
+        fake_names = list(glob.glob('{}/*.jpg'.format(args.path2)))
     print(len(real_names), len(fake_names))
     assert len(real_names) == len(fake_names)
     
