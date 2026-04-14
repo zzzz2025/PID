@@ -122,7 +122,7 @@ class KAISTTrain(KAISTBase):
     def __init__(self, **kwargs):
         super().__init__(
             ir_dir="./dataset/train/lwir",
-            vi_dir="./dataset//train/visible",
+            vi_dir="./dataset/train/visible",
             **kwargs
         )
 
