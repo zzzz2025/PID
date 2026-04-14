@@ -25,6 +25,8 @@ from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, Autoenc
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
 
+from ldm.losses.thermal_order_consistency import ThermalOrderConsistencyLoss
+
 from ldm.models.diffusion.HADARloss import HADARloss
 import cv2
 
@@ -75,6 +77,8 @@ class DDPM(pl.LightningModule):
                  logvar_init=0.,
                  tevloss_weight_tev=0,
                  tevloss_weight_rec=0,
+                 tevloss_weight_toc=0,        # ← 新增
+                 toc_patch_size=8,
                  pixel_tev=True,
                  patch=3,
                  ):
@@ -111,6 +115,8 @@ class DDPM(pl.LightningModule):
         self.patch_size = 256 // patch
         self.tevloss_weight_tev = tevloss_weight_tev
         self.tevloss_weight_rec = tevloss_weight_rec
+        self.tevloss_weight_toc = tevloss_weight_toc     # ← 新增
+        self.toc_loss_fn = ThermalOrderConsistencyLoss(patch_size=toc_patch_size)  # ← 新增
 
         if monitor is not None:
             self.monitor = monitor
@@ -1065,6 +1071,33 @@ class LatentDiffusion(DDPM):
         tev_pred = self.tev_net(x_pred_decode)
         tev_true = self.tev_net(x_true_decode)
         return torch.nn.functional.mse_loss(tev_pred, tev_true, reduction='none')
+    
+
+    def get_loss_toc(self, x_pred, x_true):
+        """
+        Thermal Order Consistency Loss.
+        在像素空间上计算预测图像与 GT 之间的 patch 级亮度排序一致性。
+        
+        Args:
+            x_pred: 预测的 latent x0_hat [B, C, h, w]（latent space）
+            x_true: GT 的 latent x_start  [B, C, h, w]（latent space）
+        Returns:
+            loss_toc: scalar tensor
+        """
+        # 解码到像素空间（与 get_loss_rec / get_loss_tev 保持一致的逻辑）
+        if self.pixel_tev:
+            x_pred_decode = self.decode_first_stage(x_pred)
+            x_true_decode = self.decode_first_stage(x_true)
+        else:
+            x_pred_decode = x_pred
+            x_true_decode = x_true
+        
+        # 归一化到 [0, 1]
+        x_pred_decode = torch.clamp((x_pred_decode + 1.0) / 2.0, min=0.0, max=1.0)
+        x_true_decode = torch.clamp((x_true_decode + 1.0) / 2.0, min=0.0, max=1.0)
+        
+        # 调用 L_TOC
+        return self.toc_loss_fn(x_pred_decode, x_true_decode)
 
     def p_losses(self, x_start, cond, t, noise=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
@@ -1104,12 +1137,24 @@ class LatentDiffusion(DDPM):
         
         t = t.to('cpu')
         
+        # ---- 时间步 mask：物理损失只在去噪后期 (t < 150) 生效 ----
         mask = (t < 150).float()
         mask = mask.to(self.device)
         loss_tev = loss_tev * mask
         loss_tev = loss_tev.mean()
         
-        loss_dict.update({f'{prefix}/loss_tev':loss_tev})
+        # ---- L_TOC: 热序一致性损失 ----
+        loss_toc = torch.tensor(0.0, device=self.device)
+        if self.tevloss_weight_toc != 0:
+            # L_TOC 返回的是标量，无需 per-sample mask，
+            # 但同样只在去噪后期才有意义（早期图像太模糊，排序无意义）
+            any_valid = mask.sum() > 0
+            if any_valid:
+                loss_toc = self.tevloss_weight_toc * self.get_loss_toc(x0_hat, x_start)
+                loss_toc = torch.clamp(loss_toc, min=0.0, max=1.0)
+        
+        loss_dict.update({f'{prefix}/loss_tev': loss_tev})
+        loss_dict.update({f'{prefix}/loss_toc': loss_toc})   # ← 新增日志
         
         logvar_t = self.logvar[t].to(self.device)
         loss = loss_simple / torch.exp(logvar_t) + logvar_t
@@ -1124,6 +1169,7 @@ class LatentDiffusion(DDPM):
         loss += (self.original_elbo_weight * loss_vlb)
 
         loss += loss_tev
+        loss += loss_toc 
         loss_dict.update({f'{prefix}/loss': loss})
 
         return loss, loss_dict
